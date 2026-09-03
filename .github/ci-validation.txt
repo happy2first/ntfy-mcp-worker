@@ -1,0 +1,1 @@
+Temporary branch marker used to validate the initial Cloudflare Worker build through pull_request CI.
