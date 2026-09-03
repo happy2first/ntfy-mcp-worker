@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ntfy-mcp-worker",
-  "main": "src/main.ts",
+  "main": "src/worker.ts",
   "keep_vars": true,
   "compatibility_date": "2026-09-03",
   "compatibility_flags": ["nodejs_compat"],
@@ -17,12 +17,6 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["NtfyServerDO"]
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "ATTACHMENTS",
-      "bucket_name": "ntfy-mcp-attachments"
     }
   ],
   "observability": {
