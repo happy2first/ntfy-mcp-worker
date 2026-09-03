@@ -1,0 +1,19 @@
+# Public URL must exactly match the Default Server configured in the ntfy iOS app.
+BASE_URL=https://ntfy.mcp.happyfirst.top
+UPSTREAM_BASE_URL=https://ntfy.sh
+# UPSTREAM_ACCESS_TOKEN=
+
+# Optional ntfy protocol authentication. Leave all unset for public topics.
+# NTFY_USERNAME=
+# NTFY_PASSWORD=
+# NTFY_ACCESS_TOKEN=
+
+# Protect /admin and /mcp with either Cloudflare Access or an admin bearer token.
+# TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+# POLICY_AUD=
+# ADMIN_TOKEN=
+
+# Defaults
+MESSAGE_RETENTION_SECONDS=43200
+ATTACHMENT_RETENTION_SECONDS=10800
+MCP_DEFAULT_TOPIC=alerts
