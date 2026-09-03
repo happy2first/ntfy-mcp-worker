@@ -4,24 +4,23 @@ A Cloudflare Workers + Durable Objects rewrite of the core [ntfy](https://github
 
 Target deployment: `https://ntfy.mcp.happyfirst.top`
 
-## Why this exists
-
-The official ntfy server is a Go service designed around a normal server process, SQLite/PostgreSQL, local/S3 attachments, and long-lived HTTP/WebSocket connections. This project implements the ntfy-compatible paths needed for a personal Cloudflare-native deployment:
+## What it provides
 
 - HTTP publish: `POST/PUT /<topic>` and JSON publish at `/`
-- Sequence IDs: update semantics plus `clear` / `delete` events
-- Subscribers: JSON stream, SSE, raw stream, WebSocket, polling and cache replay
+- Sequence IDs plus `clear` / `delete` events
+- JSON, SSE, raw, WebSocket subscriptions, polling and cache replay
 - `since=all|latest|<duration>|<unix>|<message-id>` and `id=<message-id>`
-- Delayed delivery (10 seconds to 3 days) backed by Durable Object alarms
+- Delayed delivery backed by Durable Object alarms
 - Message cache in Durable Object SQLite
-- Attachments in Cloudflare R2, including `X-Filename` uploads and external `X-Attach`
-- Standard ntfy metadata: title, priority, tags, click URL, icon, Markdown, actions, cache flag
-- Basic auth and bearer-token authentication for ntfy protocol routes
+- Local attachments in the same Durable Object SQLite, split into 1 MiB BLOB chunks
+- External `X-Attach` URLs without local copying
+- Standard ntfy metadata: title, priority, tags, click URL, icon, Markdown, actions and cache flag
+- Basic/Bearer auth for ntfy protocol routes
 - iOS instant notifications through the official ntfy upstream/APNs path
 - Streamable HTTP MCP endpoint at `/mcp`
-- Admin UI at `/admin` for message history, immediate physical deletion, per-message scheduled deletion and retention settings
+- `/admin` message history, immediate physical deletion, scheduled deletion and retention settings
 
-The MCP tool naming and lifecycle model follow the public `cyanheads/ntfy-mcp-server` project where appropriate, while the Cloudflare layout, Access protection and admin-page approach follow `happy2first/weixin-mcp-worker`.
+The Cloudflare layout and attachment-storage strategy intentionally follow `happy2first/weixin-mcp-worker`: structured records and media stay in one SQLite-backed Durable Object, so no R2 account or R2 billing setup is required.
 
 ## Architecture
 
@@ -37,19 +36,52 @@ Publishers / ntfy iOS / MCP client
                 |
                 v
         NtfyServerDO (SQLite)
-       messages / schedules / subscribers
-          |                    |
-          v                    v
-      R2 attachments       ntfy.sh upstream
-                              |
-                           Firebase/APNs
-                              |
-                           ntfy iOS app
-                              |
-                     polls original Worker
+      /          |           \
+ messages   attachment BLOBs  schedules/subscribers
+                |
+        1 MiB chunk rows
+
+NtfyServerDO ---- poll request ----> ntfy.sh upstream
+                                      |
+                                   Firebase/APNs
+                                      |
+                                   ntfy iOS app
+                                      |
+                              polls original Worker
 ```
 
-### iOS privacy model
+## Attachment storage
+
+Locally uploaded attachments use two SQLite tables:
+
+```text
+attachment_objects
+├─ attachment_ref
+├─ message_id
+├─ name / MIME type
+├─ size_bytes
+├─ chunk_count
+├─ expires
+└─ created_at
+
+attachment_chunks
+├─ attachment_ref
+├─ chunk_index
+└─ data BLOB
+```
+
+Current limits/defaults:
+
+- maximum local attachment: **20 MiB**;
+- chunk size: **1 MiB**;
+- default attachment lifetime: **3 hours** (`ATTACHMENT_RETENTION_SECONDS=10800`);
+- message and its local attachment are physically deleted together in one Durable Object SQLite transaction;
+- expired attachments are cleaned by the same Durable Object alarm scheduler;
+- `/admin/api/status` and `ntfy_status` report attachment count, bytes and chunk count.
+
+This is intended for notification-sized images, PDFs and small files, not bulk object storage. If the project later needs large or long-lived files, R2 can be added as an optional backend without changing the public ntfy URLs.
+
+## iOS privacy model
 
 Set:
 
@@ -65,11 +97,7 @@ https://ntfy.sh/<sha256(BASE_URL + "/" + topic)>
 X-Poll-ID: <message-id>
 ```
 
-The upstream receives the hashed topic URL and message ID, not your notification body. APNs wakes the official iOS app, which fetches the real message from:
-
-```text
-https://ntfy.mcp.happyfirst.top/<topic>/json?poll=1&id=<message-id>
-```
+The upstream receives the hashed topic URL and message ID, not your notification body. APNs wakes the official iOS app, which fetches the actual message from your Worker.
 
 **Important:** `BASE_URL` must exactly match the Default Server configured in the iOS ntfy app.
 
@@ -80,45 +108,30 @@ https://ntfy.mcp.happyfirst.top/<topic>/json?poll=1&id=<message-id>
 | `ntfy_publish_message` | Publish/update a notification, including delay and actions |
 | `ntfy_fetch_messages` | Poll/replay cached messages from one or more topics |
 | `ntfy_manage_message` | Emit `message_clear` / `message_delete` by sequence ID |
-| `ntfy_delete_record` | Admin-only physical delete or scheduled record deletion |
-| `ntfy_status` | Inspect message/topic counts, subscribers, SQLite usage and upstream config |
+| `ntfy_delete_record` | Physical delete or scheduled record deletion; local attachment is removed with the record |
+| `ntfy_status` | Inspect message/topic counts, subscribers, SQLite/attachment usage and upstream config |
 
-The MCP endpoint uses Streamable HTTP at `/mcp` and is protected by the same admin authentication as `/admin`.
+`/mcp` is protected by the same admin authentication as `/admin`.
 
 ## Admin UI
 
 `/admin` provides:
 
-- message count, topic count and scheduled-operation summary;
+- message/topic/scheduled-operation summary;
 - topic filter and text/ID search;
 - message metadata and attachment display;
-- immediate physical deletion (including local R2 attachment);
-- per-message scheduled deletion;
-- cancellation of a scheduled deletion;
+- immediate physical deletion including local SQLite attachment chunks;
+- per-message scheduled deletion and cancellation;
 - global cache retention setting;
 - one-click test notification.
 
-This is intentionally an operator console. It is separate from ntfy's end-user Web App.
-
 ## Cloudflare resources
 
-### 1. R2 bucket
-
-Create the bucket referenced by `wrangler.jsonc`:
-
-```bash
-npx wrangler r2 bucket create ntfy-mcp-attachments
-```
-
-If you choose a different bucket name, edit `r2_buckets[0].bucket_name`.
-
-### 2. Durable Object
+Only the Worker and one SQLite-backed Durable Object are required. **R2 is not required.**
 
 The first deploy applies the `v1` SQLite Durable Object migration from `wrangler.jsonc` automatically.
 
-### 3. Variables and secrets
-
-Public/runtime variables:
+### Variables
 
 ```text
 BASE_URL=https://ntfy.mcp.happyfirst.top
@@ -128,13 +141,13 @@ ATTACHMENT_RETENTION_SECONDS=10800
 MCP_DEFAULT_TOPIC=alerts
 ```
 
-Optional iOS upstream token, only if needed for upstream rate limits:
+Optional iOS upstream token:
 
 ```bash
 npx wrangler secret put UPSTREAM_ACCESS_TOKEN
 ```
 
-Optional ntfy protocol protection. Use either bearer token, Basic auth, or both:
+Optional ntfy protocol protection:
 
 ```bash
 npx wrangler secret put NTFY_ACCESS_TOKEN
@@ -142,16 +155,14 @@ npx wrangler secret put NTFY_USERNAME
 npx wrangler secret put NTFY_PASSWORD
 ```
 
-Protect `/admin` and `/mcp` using **one** of these approaches:
-
-**Cloudflare Access (preferred):**
+Protect `/admin` and `/mcp` using Cloudflare Access (preferred):
 
 ```text
 TEAM_DOMAIN=https://<team>.cloudflareaccess.com
 POLICY_AUD=<Access application audience tag>
 ```
 
-**Static admin token:**
+or a static token:
 
 ```bash
 npx wrangler secret put ADMIN_TOKEN
@@ -163,8 +174,6 @@ With `ADMIN_TOKEN`, bootstrap the browser session once with:
 https://ntfy.mcp.happyfirst.top/admin?token=<ADMIN_TOKEN>
 ```
 
-The Worker stores it in a Secure/HttpOnly/SameSite cookie scoped to `/admin`.
-
 ## Deploy
 
 ```bash
@@ -173,17 +182,17 @@ npm run check
 npm run deploy
 ```
 
-Then add the custom domain in Cloudflare Workers:
+Then bind the custom domain:
 
 ```text
 ntfy.mcp.happyfirst.top
 ```
 
-Do not put a path prefix in `BASE_URL` unless the iOS app is configured with exactly the same value.
+No `wrangler r2 bucket create` step is required.
 
 ## Quick protocol tests
 
-Publish:
+Publish text:
 
 ```bash
 curl -d 'hello from worker' \
@@ -193,16 +202,19 @@ curl -d 'hello from worker' \
   https://ntfy.mcp.happyfirst.top/alerts
 ```
 
+Upload a local attachment:
+
+```bash
+curl -T report.pdf \
+  -H 'Filename: report.pdf' \
+  -H 'Message: monthly report' \
+  https://ntfy.mcp.happyfirst.top/alerts
+```
+
 Poll:
 
 ```bash
 curl 'https://ntfy.mcp.happyfirst.top/alerts/json?poll=1&since=10m'
-```
-
-SSE:
-
-```bash
-curl -N https://ntfy.mcp.happyfirst.top/alerts/sse
 ```
 
 Schedule:
@@ -212,42 +224,33 @@ curl -d '10 minutes later' -H 'Delay: 10m' \
   https://ntfy.mcp.happyfirst.top/alerts
 ```
 
-Sequence delete:
-
-```bash
-curl -X DELETE \
-  https://ntfy.mcp.happyfirst.top/alerts/my-sequence-id
-```
-
 ## Compatibility boundary
 
-This is a Cloudflare-native implementation, not a line-by-line port of the Go server. The first release intentionally focuses on the features required for ntfy clients, iOS self-hosting, MCP and personal notification history.
+This is a Cloudflare-native implementation, not a line-by-line port of the Go server. It intentionally focuses on personal ntfy clients, iOS self-hosting, MCP and notification history.
 
-Not implemented in v0.1:
+Not currently implemented:
 
-- multi-user ntfy account/signup/login/reservation database and per-topic ACL administration;
-- SMTP e-mail publishing/notification and Twilio calls;
+- full ntfy multi-user signup/login/reservation/ACL subsystem;
+- SMTP email notification and Twilio calls;
 - browser Web Push/VAPID fan-out;
 - Matrix Push Gateway;
-- server-side Go template evaluation;
+- server-side Go templates;
 - ntfy billing/tier/rate-limit accounting;
-- the full official ntfy React Web App bundle.
-
-These are isolated from the core protocol and can be added without changing the Durable Object message model. For this personal deployment, Cloudflare Access/static protocol credentials replace the full ntfy account subsystem.
+- full official ntfy React Web App bundle.
 
 ## Security notes
 
-- Configure Cloudflare Access or `ADMIN_TOKEN` before exposing `/admin` and `/mcp`; both routes intentionally return 503 when neither admin-auth mode is configured.
-- Public ntfy topics are effectively capabilities: anyone who knows a topic can read/write it. Configure Basic/Bearer protocol auth if topic names should not be sufficient authorization.
-- R2 attachment URLs pass through the Worker and therefore inherit ntfy protocol authentication.
-- `UPSTREAM_ACCESS_TOKEN`, protocol credentials and `ADMIN_TOKEN` should be Wrangler secrets, not committed variables.
+- Configure Cloudflare Access or `ADMIN_TOKEN` before exposing `/admin` and `/mcp`.
+- Public ntfy topics are effectively capabilities; configure Basic/Bearer protocol auth if topic names alone should not grant access.
+- Local attachment downloads pass through the Worker and inherit ntfy protocol authentication.
+- Keep `UPSTREAM_ACCESS_TOKEN`, protocol credentials and `ADMIN_TOKEN` as Wrangler secrets.
 
 ## Source references
 
 - `binwiederhier/ntfy` — protocol/message model, delayed delivery, sequence lifecycle and iOS upstream design.
-- `binwiederhier/ntfy-ios` — `poll=1&id=<message-id>` behavior used by the Notification Service Extension.
-- `cyanheads/ntfy-mcp-server` — MCP tool surface and message lifecycle conventions.
-- `happy2first/weixin-mcp-worker` — Cloudflare Worker + Durable Object + MCP + protected admin-console project structure.
+- `binwiederhier/ntfy-ios` — iOS poll behavior.
+- `cyanheads/ntfy-mcp-server` — MCP lifecycle conventions.
+- `happy2first/weixin-mcp-worker` — Worker + Durable Object + MCP + admin console and SQLite media chunking strategy.
 
 ## License
 
