@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ntfy-mcp-worker",
+  "main": "src/ios-compat.ts",
+  "keep_vars": true,
+  "compatibility_date": "2026-09-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "NTFY_SERVER",
+        "class_name": "NtfyServerDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["NtfyServerDO"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

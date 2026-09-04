@@ -1,0 +1,20 @@
+# Public URL must exactly match the Default Server configured in the ntfy iOS app.
+BASE_URL=https://ntfy.example.com
+UPSTREAM_BASE_URL=https://ntfy.sh
+# UPSTREAM_ACCESS_TOKEN=
+
+# Optional ntfy protocol authentication. Leave all unset for public topics.
+# NTFY_USERNAME=
+# NTFY_PASSWORD=
+# NTFY_ACCESS_TOKEN=
+
+# Protect /admin and /mcp with either Cloudflare Access or an admin bearer token.
+# TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+# POLICY_AUD=
+# ADMIN_TOKEN=
+
+# Default topic for MCP calls that omit topic.
+MCP_DEFAULT_TOPIC=alerts
+
+# History retention is capacity-based and configured from /admin.
+# Default: 700 MB; allowed range: 50-700 MB; cleanup target: 90%.
