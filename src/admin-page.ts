@@ -38,6 +38,32 @@ export const ADMIN_PAGE = String.raw`<!doctype html>
     <div class="footer"><span class="muted" id="count">—</span><div><button class="btn small" id="prev">上一页</button> <button class="btn small" id="next">下一页</button></div></div>
   </div>
 
+  <div class="card panel" id="webhookPanel">
+    <h2 style="font-size:18px;margin-top:0">Webhook 管理</h2>
+    <p class="muted" id="webhookStatus">读取 Webhook 配置中…</p>
+    <div class="toolbar">
+      <label for="webhookTopic">目标 topic</label>
+      <input id="webhookTopic" placeholder="例如 AITrend" maxlength="64" />
+      <button class="btn primary" id="webhookGenerate">生成 URL</button>
+      <button class="btn" id="webhookCopy" disabled>复制</button>
+    </div>
+    <input id="webhookUrl" readonly aria-label="Webhook URL" style="width:100%;padding:10px;margin:10px 0" placeholder="生成后显示完整 Webhook URL" />
+    <p class="muted">URL 含发布凭证，仅提供给可信来源。通常无需修改以下映射即可接收通知。</p>
+    <div class="toolbar">
+      <label for="webhookScope">字段映射</label>
+      <select id="webhookScope"><option value="global">全局默认规则</option><option value="topic">当前 topic 覆盖规则</option></select>
+      <button class="btn" id="webhookLoad">读取配置</button>
+      <button class="btn primary" id="webhookSave" disabled>保存规则</button>
+    </div>
+    <p class="muted">每项填写来源字段路径，多个路径用英文逗号分隔，按顺序尝试；支持 data.message、payload.url。留空表示继承。优先尝试 topic 规则，其次全局规则，再用内置规则。</p>
+    <div class="storage" style="grid-template-columns:1fr;gap:10px">
+      <label>标题 → title<input id="webhookTitle" placeholder="title, subject, name" /></label>
+      <label>正文 → message<input id="webhookMessage" placeholder="message, summary, content, description, text, body" /></label>
+      <label>点击链接 → click<input id="webhookClick" placeholder="url, link, href, click" /></label>
+    </div>
+    <p class="muted" id="webhookInheritance"></p>
+  </div>
+
   <div class="card panel">
     <div class="storage-head"><div><div style="font-weight:700">历史数据自动保留</div><div class="muted">按容量控制，不按时间过期</div></div><span class="pill">自动清理</span></div>
     <div class="storage-note">默认保留 700 MB，可配置 50–700 MB。超过上限后自动删除最旧的已投递消息及其附件，并清理到约 90% 水位；尚未投递的定时消息不会被自动删除。</div>
@@ -75,6 +101,44 @@ $('rows').addEventListener('click',e=>{const d=e.target.closest('[data-delete]')
 $('refresh').onclick=()=>{state.offset=0;reload()};$('topic').onchange=()=>{state.offset=0;loadMessages()};let timer;$('q').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{state.offset=0;loadMessages()},250)};$('prev').onclick=()=>{state.offset=Math.max(0,state.offset-state.limit);loadMessages()};$('next').onclick=()=>{state.offset+=state.limit;loadMessages()};
 $('saveStorage').onclick=async()=>{try{const limitMB=Number($('storageLimitMB').value);await api('/admin/api/storage-limit',{method:'POST',body:JSON.stringify({limitMB})});toast('存储上限已更新');await reload()}catch(e){toast(e.message,true)}};
 $('publishTest').onclick=async()=>{const topic=$('topic').value||prompt('发送到哪个 topic？','test-zhenhua');if(!topic)return;try{const data=await api('/admin/api/test-publish',{method:'POST',body:JSON.stringify({topic})});toast('测试通知已发送：'+data.id);setTimeout(reload,300)}catch(e){toast(e.message,true)}};
+const webhookFields={title:'webhookTitle',message:'webhookMessage',click:'webhookClick'};
+let webhookLoaded=null;
+const webhookSelection=()=>({scope:$('webhookScope').value,topic:$('webhookTopic').value.trim()});
+function invalidateWebhook(){webhookLoaded=null;$('webhookSave').disabled=true}
+async function loadWebhook(){
+  const selected=webhookSelection();invalidateWebhook();
+  try{
+    if(selected.scope==='topic'&&!selected.topic)throw new Error('请先输入 topic');
+    const data=await api('/admin/api/webhook/config'+(selected.topic?'?topic='+encodeURIComponent(selected.topic):''));
+    if(JSON.stringify(selected)!==JSON.stringify(webhookSelection()))return;
+    const mapping=selected.scope==='topic'?data.topic:data.global;
+    for(const [field,id] of Object.entries(webhookFields))$(id).value=(mapping[field]||[]).join(', ');
+    $('webhookStatus').textContent=data.enabled?'Webhook 已启用，所有 topic 默认继承全局规则。':'尚未启用：请先在 Cloudflare Worker 的机密中配置 WEBHOOK_MASTER_SECRET。';
+    $('webhookInheritance').textContent=Object.keys(webhookFields).map(field=>field+' 继承：'+[...(selected.scope==='topic'?(data.global[field]||[]):[]),...data.defaults[field]].join(', ')).join('；');
+    webhookLoaded=selected;$('webhookSave').disabled=false;
+  }catch(e){toast(e.message,true)}
+}
+$('webhookLoad').onclick=loadWebhook;
+$('webhookScope').onchange=loadWebhook;
+$('webhookTopic').oninput=()=>{invalidateWebhook();$('webhookUrl').value='';$('webhookCopy').disabled=true};
+$('webhookGenerate').onclick=async()=>{try{
+  const topic=$('webhookTopic').value.trim();
+  const data=await api('/admin/api/webhook/url',{method:'POST',body:JSON.stringify({topic})});
+  if(topic!==$('webhookTopic').value.trim())return;
+  $('webhookUrl').value=data.url;$('webhookCopy').disabled=false;
+}catch(e){toast(e.message,true)}};
+$('webhookCopy').onclick=async()=>{try{await navigator.clipboard.writeText($('webhookUrl').value);toast('Webhook URL 已复制')}catch(e){$('webhookUrl').select();toast('请手动复制选中的 URL',true)}};
+$('webhookSave').onclick=async()=>{try{
+  const selected=webhookSelection();
+  if(!webhookLoaded||JSON.stringify(selected)!==JSON.stringify(webhookLoaded))throw new Error('请先读取当前配置');
+  const mapping={};
+  for(const [field,id] of Object.entries(webhookFields)){const paths=$(id).value.split(',').map(s=>s.trim()).filter(Boolean);if(paths.length)mapping[field]=paths}
+  $('webhookSave').disabled=true;
+  await api('/admin/api/webhook/config',{method:'PUT',body:JSON.stringify({...selected,mapping})});
+  toast('映射规则已保存');await loadWebhook();
+}catch(e){toast(e.message,true);$('webhookSave').disabled=!webhookLoaded}};
+loadWebhook();
 reload();
 </script>
 </body></html>`;
+

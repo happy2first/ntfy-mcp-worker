@@ -1,6 +1,7 @@
 export interface Env {
   NTFY_SERVER: DurableObjectNamespace;
   BASE_URL?: string;
+  WEBHOOK_MASTER_SECRET?: string;
   UPSTREAM_BASE_URL?: string;
   UPSTREAM_ACCESS_TOKEN?: string;
   NTFY_USERNAME?: string;
@@ -71,3 +72,4 @@ export type PublishInput = {
   message: StoredMessage;
   baseUrl: string;
 };
+

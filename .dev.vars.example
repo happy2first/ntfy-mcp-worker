@@ -18,3 +18,9 @@ MCP_DEFAULT_TOPIC=alerts
 
 # History retention is capacity-based and configured from /admin.
 # Default: 700 MB; allowed range: 50-700 MB; cleanup target: 90%.
+
+
+# Optional: enables POST /webhook/:topic/:secret. Set a long random secret.
+# Production: npx wrangler secret put WEBHOOK_MASTER_SECRET
+# Never put the production value in wrangler.jsonc, Git, or frontend code.
+WEBHOOK_MASTER_SECRET=""

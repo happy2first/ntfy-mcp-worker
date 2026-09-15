@@ -1,3 +1,4 @@
+import { validateMapping, webhookTopic, WebhookError, webhookErrorResponse, readWebhookBody } from "./webhook.ts";
 import { DurableObject } from "cloudflare:workers";
 import { normalizeBaseUrl, parseSince, randomId, sanitizeFilename, sha256Hex } from "./protocol.js";
 import type { Env, NtfyMessage, PublishInput, StoredAttachment, StoredMessage } from "./runtime-types.js";
@@ -460,6 +461,26 @@ export class NtfyServerDO extends DurableObject<Env> {
     try {
       this.ensureSchema();
       const url = new URL(request.url);
+      if (url.pathname === "/webhook/config") {
+        try {
+          if (request.method === "GET") {
+            const topic = url.searchParams.get("topic");
+            if (topic !== null) webhookTopic(topic);
+            return json({ global: parseJson(this.setting("webhook:global") || null, {}), topic: topic === null ? {} : parseJson(this.setting(`webhook:topic:${topic}`) || null, {}) });
+          }
+          if (request.method === "PUT") {
+            const body = JSON.parse(await readWebhookBody(request, 16384));
+              if (!body || typeof body !== "object" || Array.isArray(body)) throw new WebhookError("invalid_request");
+            if (body.scope !== "global" && body.scope !== "topic") throw new WebhookError("invalid_mapping_scope");
+            const key = body.scope === "global" ? "webhook:global" : `webhook:topic:${webhookTopic(body.topic)}`;
+            const mapping = validateMapping(body.mapping);
+            if (Object.keys(mapping).length) this.ctx.storage.sql.exec("INSERT OR REPLACE INTO settings (key,value,updated_at) VALUES (?,?,?)", key, JSON.stringify(mapping), new Date().toISOString());
+            else this.ctx.storage.sql.exec("DELETE FROM settings WHERE key=?", key);
+            return json({ ok: true, mapping });
+          }
+          return new Response(null, { status: 405 });
+        } catch (error) { return webhookErrorResponse(error instanceof SyntaxError ? new WebhookError("invalid_json") : error); }
+      }
       if (url.pathname.startsWith("/attachment/")) {
         const messageId = decodeURIComponent(url.pathname.slice("/attachment/".length));
         if (request.method === "POST") return await this.handleAttachmentUpload(request, messageId);
@@ -481,3 +502,4 @@ export class NtfyServerDO extends DurableObject<Env> {
     }
   }
 }
+

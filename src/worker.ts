@@ -1,3 +1,4 @@
+import { generateWebhookSecret, handleWebhook, readWebhookBody, validateMapping, webhookTopic, webhookErrorResponse, WebhookError, WEBHOOK_DEFAULTS } from "./webhook.ts";
 import { Buffer } from "node:buffer";
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
@@ -339,6 +340,15 @@ function createServer(env: Env) {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    if (/^\/webhook\/[^/]+\/[^/]+/.test(url.pathname)) return handleWebhook(request, {
+      master: env.WEBHOOK_MASTER_SECRET || "",
+      config: topic => callServerJson(env, `/webhook/config?topic=${encodeURIComponent(topic)}`),
+      publish: (topic, input) => {
+        const msg = { ...messageDefaults(topic, env), ...input };
+        msg.sequence_id = msg.id;
+        return publishStored(env, msg, baseUrl(request, env));
+      },
+    });
     if (url.pathname === "/health" || url.pathname === "/v1/health") return Response.json({ healthy: true, ok: true, service: "ntfy-mcp-worker", version: VERSION });
     if (url.pathname === "/v1/config") return Response.json({ base_url: baseUrl(request, env), enable_login: false, enable_signup: false, enable_reservations: false, app_root: "/" });
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/api/") || url.pathname === "/mcp") {
@@ -353,6 +363,33 @@ export default {
       }
       if (url.pathname.startsWith("/admin/api/")) {
         const suffix = url.pathname.slice("/admin/api".length);
+        if (suffix === "/webhook/config" || suffix === "/webhook/url") {
+          try {
+            if (suffix === "/webhook/url" && request.method === "POST") {
+              const body = JSON.parse(await readWebhookBody(request, 8192));
+              if (!body || typeof body !== "object" || Array.isArray(body)) throw new WebhookError("invalid_request");
+              const topic = webhookTopic(body.topic);
+              const secret = await generateWebhookSecret(topic, env.WEBHOOK_MASTER_SECRET || "");
+              return Response.json({ url: `${baseUrl(request, env)}/webhook/${topic}/${secret}` }, { headers: { "cache-control": "no-store" } });
+            }
+            if (suffix === "/webhook/config" && request.method === "GET") {
+              const topic = url.searchParams.get("topic");
+              if (topic !== null) webhookTopic(topic);
+              const config = await callServerJson(env, `/webhook/config${topic !== null ? `?topic=${encodeURIComponent(topic)}` : ""}`);
+              return Response.json({ ...config, defaults: WEBHOOK_DEFAULTS, enabled: Boolean(env.WEBHOOK_MASTER_SECRET) }, { headers: { "cache-control": "no-store" } });
+            }
+            if (suffix === "/webhook/config" && request.method === "PUT") {
+              const body = JSON.parse(await readWebhookBody(request, 16384));
+              if (!body || typeof body !== "object" || Array.isArray(body)) throw new WebhookError("invalid_request");
+              if (body.scope !== "global" && body.scope !== "topic") throw new WebhookError("invalid_mapping_scope");
+              const topic = body.scope === "topic" ? webhookTopic(body.topic) : undefined;
+              const mapping = validateMapping(body.mapping);
+              const saved = await callServerJson(env, "/webhook/config", { method: "PUT", body: JSON.stringify({ scope: body.scope, topic, mapping }) });
+              return Response.json(saved, { headers: { "cache-control": "no-store" } });
+            }
+            return new Response(null, { status: 405, headers: { allow: suffix === "/webhook/url" ? "POST" : "GET, PUT" } });
+          } catch (error) { return webhookErrorResponse(error instanceof SyntaxError ? new WebhookError("invalid_json") : error); }
+        }
         if (suffix === "/test-publish" && request.method === "POST") {
           const body = await request.json<{ topic?: string }>();
           const topic = validateTopic(String(body.topic || env.MCP_DEFAULT_TOPIC || "alerts"));
@@ -376,3 +413,4 @@ export default {
     return handleProtocol(request, env);
   },
 };
+
