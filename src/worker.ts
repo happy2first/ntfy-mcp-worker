@@ -340,7 +340,10 @@ function createServer(env: Env) {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if (/^\/webhook\/[^/]+\/[^/]+/.test(url.pathname)) return handleWebhook(request, {
+    // HMAC credentials cannot collide with ntfy's named subscription/manage actions.
+    // Keep those routes available even when an existing topic is named "webhook".
+    const nativeWebhookAction = /^\/webhook\/[^/]+\/(?:clear|read|delete|json|sse|raw|ws)(?:\/|$)/.test(url.pathname);
+    if (!nativeWebhookAction && /^\/webhook\/[^/]+\/[^/]+/.test(url.pathname)) return handleWebhook(request, {
       master: env.WEBHOOK_MASTER_SECRET || "",
       config: topic => callServerJson(env, `/webhook/config?topic=${encodeURIComponent(topic)}`),
       publish: (topic, input) => {

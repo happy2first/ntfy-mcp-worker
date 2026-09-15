@@ -65,6 +65,9 @@ test("Worker integration: independent webhook auth, persisted sparse rules, nati
     assert.equal((await admin("/config?topic=bad%2Ftopic")).status, 400);
     assert.equal((await post("x".repeat(70001), "text/plain")).status, 413);
     assert.equal((await post("broken {", "application/json")).status, 200);
+    assert.equal((await fetch("/webhook/test-sequence", { method: "POST", headers: { authorization: "Bearer native-test" }, body: "existing topic" })).status, 200);
+    const cleared = await fetch("/webhook/test-sequence/clear", { method: "POST", headers: { authorization: "Bearer native-test" } });
+    assert.equal(cleared.status, 200); assert.equal((await cleared.json()).event, "message_clear");
     for (const body of ["null", "[]", "123"]) assert.equal((await admin("/url", { method: "POST", body })).status, 400);
     assert.equal((await fetch("/webhook", { method: "POST", headers: { authorization: "Bearer native-test" }, body: "native webhook topic" })).status, 200);
     assert.equal((await fetch("/webhook/json?poll=1", { headers: { authorization: "Bearer native-test" } })).status, 200);
