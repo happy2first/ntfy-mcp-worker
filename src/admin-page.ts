@@ -156,23 +156,43 @@ $('publishTest').onclick=async()=>{const topic=$('topic').value||prompt('发送�
 const webhookFields={title:'webhookTitle',message:'webhookMessage',click:'webhookClick'};
 let webhookLoaded=null;
 const webhookSelection=()=>({scope:$('webhookScope').value,topic:$('webhookTopic').value.trim()});
+const splitMappingPaths=value=>String(value||'').split(/[,，;；\\s]+/).map(s=>s.trim()).filter(Boolean);
+const mappingPaths=(mapping,field)=>Array.isArray(mapping?.[field])?mapping[field].filter(v=>typeof v==='string'&&v.trim()).map(v=>v.trim()):typeof mapping?.[field]==='string'?splitMappingPaths(mapping[field]):[];
 function invalidateWebhook(){webhookLoaded=null;$('webhookSave').disabled=true}
-async function loadWebhook(){
+async function loadWebhook(showToast=false){
   const selected=webhookSelection();invalidateWebhook();
   try{
     if(selected.scope==='topic'&&!selected.topic)throw new Error('请先输入 topic');
-    const data=await api('/admin/api/webhook/config'+(selected.topic?'?topic='+encodeURIComponent(selected.topic):''));
+    const query=selected.scope==='topic'?'?topic='+encodeURIComponent(selected.topic):'';
+    const data=await api('/admin/api/webhook/config'+query);
     if(JSON.stringify(selected)!==JSON.stringify(webhookSelection()))return;
-    const mapping=selected.scope==='topic'?data.topic:data.global;
-    for(const [field,id] of Object.entries(webhookFields))$(id).value=(mapping[field]||[]).join(', ');
-    $('webhookStatus').textContent=data.enabled?'Webhook 已启用，所有 topic 默认继承全局规则。':'尚未启用：请先在 Cloudflare Worker 的机密中配置 WEBHOOK_MASTER_SECRET。';
-    $('webhookInheritance').textContent=Object.keys(webhookFields).map(field=>field+' 继承：'+[...(selected.scope==='topic'?(data.global[field]||[]):[]),...data.defaults[field]].join(', ')).join('；');
+    const mapping=selected.scope==='topic'?(data.topic||{}):(data.global||{});
+    const globalMapping=data.global||{},defaults=data.defaults||{};
+    for(const [field,id] of Object.entries(webhookFields)){
+      const explicit=mappingPaths(mapping,field);
+      const inherited=selected.scope==='topic'
+        ? [...mappingPaths(globalMapping,field),...mappingPaths(defaults,field)]
+        : mappingPaths(defaults,field);
+      $(id).value=explicit.join(', ');
+      $(id).placeholder=inherited.length?'继承：'+[...new Set(inherited)].join(', '):'留空表示继承';
+    }
+    const hasExplicit=Object.keys(webhookFields).some(field=>mappingPaths(mapping,field).length);
+    if(!data.enabled)$('webhookStatus').textContent='尚未启用：请先在 Cloudflare Worker 的机密中配置 WEBHOOK_MASTER_SECRET。';
+    else if(selected.scope==='topic')$('webhookStatus').textContent=hasExplicit?'已读取 '+selected.topic+' 的 topic 覆盖规则。':'当前 topic 未配置覆盖规则，将继承全局默认规则和内置规则。';
+    else $('webhookStatus').textContent=hasExplicit?'已读取全局默认规则。':'当前未保存全局自定义规则，将直接使用内置规则。';
+    $('webhookInheritance').textContent=Object.keys(webhookFields).map(field=>{
+      const inherited=selected.scope==='topic'
+        ? [...mappingPaths(globalMapping,field),...mappingPaths(defaults,field)]
+        : mappingPaths(defaults,field);
+      return field+' 继承：'+([...new Set(inherited)].join(', ')||'无');
+    }).join('；');
     webhookLoaded=selected;$('webhookSave').disabled=false;
+    if(showToast)toast(selected.scope==='topic'?'已读取当前 topic 配置':'已读取全局默认配置');
   }catch(e){toast(e.message,true)}
 }
-$('webhookLoad').onclick=loadWebhook;
-$('webhookScope').onchange=loadWebhook;
-$('webhookTopic').oninput=()=>{invalidateWebhook();$('webhookUrl').value='';$('webhookCopy').disabled=true};
+$('webhookLoad').onclick=()=>loadWebhook(true);
+$('webhookScope').onchange=()=>loadWebhook(false);
+$('webhookTopic').oninput=()=>{invalidateWebhook();$('webhookUrl').value='';$('webhookCopy').disabled=true;if($('webhookScope').value==='topic')$('webhookStatus').textContent='topic 已变化，请读取该 topic 的覆盖规则。'};
 $('webhookGenerate').onclick=async()=>{try{
   const topic=$('webhookTopic').value.trim();
   const data=await api('/admin/api/webhook/url',{method:'POST',body:JSON.stringify({topic})});
@@ -184,10 +204,10 @@ $('webhookSave').onclick=async()=>{try{
   const selected=webhookSelection();
   if(!webhookLoaded||JSON.stringify(selected)!==JSON.stringify(webhookLoaded))throw new Error('请先读取当前配置');
   const mapping={};
-  for(const [field,id] of Object.entries(webhookFields)){const paths=$(id).value.split(',').map(s=>s.trim()).filter(Boolean);if(paths.length)mapping[field]=paths}
+  for(const [field,id] of Object.entries(webhookFields)){const paths=[...new Set(splitMappingPaths($(id).value))];if(paths.length)mapping[field]=paths}
   $('webhookSave').disabled=true;
   await api('/admin/api/webhook/config',{method:'PUT',body:JSON.stringify({...selected,mapping})});
-  toast('映射规则已保存');await loadWebhook();
+  toast(selected.scope==='topic'?'topic 覆盖规则已保存':'全局默认规则已保存');await loadWebhook(false);
 }catch(e){toast(e.message,true);$('webhookSave').disabled=!webhookLoaded}};
 loadWebhook();
 reload();
