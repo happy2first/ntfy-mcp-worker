@@ -156,7 +156,7 @@ $('publishTest').onclick=async()=>{const topic=$('topic').value||prompt('发送�
 const webhookFields={title:'webhookTitle',message:'webhookMessage',click:'webhookClick'};
 let webhookLoaded=null;
 const webhookSelection=()=>({scope:$('webhookScope').value,topic:$('webhookTopic').value.trim()});
-const splitMappingPaths=value=>String(value||'').split(/[,，;；\\s]+/).map(s=>s.trim()).filter(Boolean);
+const splitMappingPaths=value=>String(value||'').split(/[,，;；\s]+/).map(s=>s.trim()).filter(Boolean);
 const mappingPaths=(mapping,field)=>Array.isArray(mapping?.[field])?mapping[field].filter(v=>typeof v==='string'&&v.trim()).map(v=>v.trim()):typeof mapping?.[field]==='string'?splitMappingPaths(mapping[field]):[];
 function invalidateWebhook(){webhookLoaded=null;$('webhookSave').disabled=true}
 async function loadWebhook(showToast=false){
